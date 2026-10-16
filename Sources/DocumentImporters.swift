@@ -18,7 +18,8 @@ private enum ArchiveReader {
         guard let entry = archive[path] else { throw DocumentImportError.missingPackage }
         guard entry.uncompressedSize <= Int64(maxEntrySize) else { throw DocumentImportError.oversizedEntry }
         var result = Data()
-        try archive.extract(entry, consumer: { chunk in
+        // extract 的这个重载不是 @discardableResult，返回的 CRC32 明确丢掉。
+        _ = try archive.extract(entry, consumer: { chunk in
             guard UInt64(result.count) + UInt64(chunk.count) <= maxEntrySize else { throw DocumentImportError.oversizedEntry }
             result.append(chunk)
         })
