@@ -300,7 +300,7 @@ enum SearchService {
         }
     }
 
-    private static func fetchHTMLSource(_ source: Source, query: String) async throws -> (String, URL) {
+    private static func fetchHTMLSource(_ source: Source, query: String) async throws -> (html: String, url: URL) {
         guard var components = URLComponents(string: source.base) else { throw SearchIssue.badResponse }
         components.queryItems = [URLQueryItem(name: source.key, value: query)]
         guard let url = components.url else { throw SearchIssue.badResponse }
