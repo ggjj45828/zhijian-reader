@@ -17,6 +17,19 @@ final class LibraryStore: ObservableObject {
     }
     @Published var minutesByDay: [String: Int] = [:] { didSet { persistMinutes() } }
 
+    /// 勾选启用的搜索源（存标题）。空数组 = 全部，语义在 `SearchService.sources(for:)` 里。
+    @Published var searchSources: [String] = UserDefaults.standard.stringArray(forKey: "reader.searchSources") ?? [] {
+        didSet { UserDefaults.standard.set(searchSources, forKey: "reader.searchSources") }
+    }
+    /// 是否在出结果前逐个确认「这一页到底有没有正文」。
+    /// 打开后结果干净但要多等十几秒；关掉则秒出、但会混进首页与目录页。
+    @Published var verifySearchBody: Bool = {
+        let stored = UserDefaults.standard.object(forKey: "reader.verifySearchBody")
+        return stored == nil ? true : UserDefaults.standard.bool(forKey: "reader.verifySearchBody")
+    }() {
+        didSet { UserDefaults.standard.set(verifySearchBody, forKey: "reader.verifySearchBody") }
+    }
+
     private let folder: URL
     private let libraryURL: URL
     private let minutesURL: URL

@@ -103,42 +103,278 @@ struct BookshelfView: View {
 
 struct DiscoverView: View {
     @EnvironmentObject private var store: LibraryStore
+
     @State private var query = ""
     @State private var pastedURL = ""
     @State private var results: [WebCandidate] = []
-    @State private var errors: [String] = []
     @State private var searching = false
     @State private var message: String?
+    @State private var stage = ""
+    @State private var verifiedDone = 0
+    @State private var verifiedTotal = 0
+    @State private var kept = 0
+    @State private var failures: [String] = []
+    @State private var hits: [String: Int] = [:]
+
+    @MainActor private var activeSources: [SearchService.Source] {
+        SearchService.sources(for: store.searchSources)
+    }
 
     var body: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 8) { TextField("书名、作者或章节", text: $query).textFieldStyle(.roundedBorder).submitLabel(.search).onSubmit { runSearch() }; Button { runSearch() } label: { Image(systemName: "magnifyingglass").font(.headline).padding(12) }.buttonStyle(.borderedProminent).disabled(searching || query.trimmingCharacters(in: .whitespaces).isEmpty) }
-                .padding(.horizontal).padding(.top, 12)
-            Text("通过 iPhone 当前网络并行查询百度和必应。阅读器在本机提取网页，不需要 NAS 搜索服务。")
-                .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal)
-            HStack { TextField("也可以粘贴公开章节链接", text: $pastedURL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder); NavigationLink { if let url = URL(string: pastedURL) { WebNovelReader(chapter: WebChapter(title: url.host ?? "网页正文", url: url.absoluteString)) } else { ContentUnavailableView("链接无效", systemImage: "link.badge.plus") } } label: { Image(systemName: "arrow.down.doc").padding(10) }.buttonStyle(.bordered).disabled(URL(string: pastedURL)?.scheme == nil) }.padding(.horizontal)
-            if searching { ProgressView("正在查询，最长约 9 秒…").padding() }
-            if let message { Text(message).font(.footnote).foregroundStyle(.secondary).padding(.horizontal) }
-            if !errors.isEmpty { Text(errors.joined(separator: "\n")).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal) }
-            List(results) { candidate in
-                NavigationLink { WebNovelReader(chapter: WebChapter(title: candidate.title, url: candidate.url.absoluteString)) } label: {
-                    VStack(alignment: .leading, spacing: 5) { Text(candidate.title).font(.headline).lineLimit(2); Text(candidate.snippet.isEmpty ? candidate.url.host ?? "网页来源" : candidate.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(3); Text("\(candidate.engine) · \(candidate.url.host ?? "")").font(.caption2).foregroundStyle(store.theme.tint) }
-                        .padding(.vertical, 5)
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                TextField("书名、作者或章节", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.search)
+                    .onSubmit { runSearch() }
+                Button { runSearch() } label: {
+                    Image(systemName: "magnifyingglass").font(.headline).padding(12)
                 }
-            }.listStyle(.plain)
+                .buttonStyle(.borderedProminent)
+                .disabled(searching || query.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.horizontal).padding(.top, 12)
+
+            sourceRow
+            pasteRow
+            if searching || !stage.isEmpty { statusBlock }
+            if !failures.isEmpty { failureBlock }
+            if let message { Text(message).font(.footnote).foregroundStyle(.secondary).padding(.horizontal) }
+
+            if results.isEmpty {
+                if searching {
+                    Spacer()
+                } else {
+                    ContentUnavailableView("还没有结果", systemImage: "text.magnifyingglass",
+                                           description: Text("会在 \(activeSources.count) 个搜索源里找有正文的页面。"))
+                }
+            } else {
+                // 行内容就地展开，不抽成方法 —— 抽出去就变成 `body` 之外的成员，
+                // 读 `store.theme.tint` 会撞上主线程隔离检查。
+                List(results) { candidate in
+                    NavigationLink {
+                        WebNovelReader(chapter: WebChapter(title: candidate.title,
+                                                           url: candidate.url.absoluteString))
+                    } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(candidate.title).font(.headline).lineLimit(2)
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(candidate.hasBody ? store.theme.tint : Color.secondary.opacity(0.4))
+                                    .frame(width: 6, height: 6)
+                                Text(subtitle(candidate)).font(.caption2)
+                                    .foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            if !candidate.snippet.isEmpty {
+                                Text(candidate.snippet).font(.caption)
+                                    .foregroundStyle(.secondary).lineLimit(2)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .listStyle(.plain)
+            }
         }
         .background(store.theme.background.ignoresSafeArea())
         .navigationTitle("发现与搜索")
     }
 
+    // MARK: - 搜索源
+
+    @MainActor
+    private var sourceRow: some View {
+        HStack(spacing: 10) {
+            Menu {
+                Button("全选 \(SearchService.allSources.count) 个源") { store.searchSources = [] }
+                Button("只留国内引擎 \(SearchService.domesticCount) 个") {
+                    store.searchSources = SearchService.allSources.filter { !$0.overseas }.map(\.title)
+                }
+                Button("只留开放书源") {
+                    let kinds: Set<String> = ["wikisource", "catalogue", "archive"]
+                    store.searchSources = SearchService.allSources.filter { kinds.contains($0.kind.rawValue) }.map(\.title)
+                }
+                Divider()
+                ForEach(SearchService.allSources) { source in
+                    Button { toggle(source) } label: {
+                        Label(source.title + (source.overseas ? "（海外）" : ""),
+                              systemImage: isEnabled(source) ? "checkmark.circle.fill" : "circle")
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                    Text("搜索源 \(activeSources.count)/\(SearchService.allSources.count)")
+                    Image(systemName: "chevron.down").font(.caption2)
+                }
+                .font(.footnote.weight(.semibold))
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(store.theme.tint.opacity(0.12), in: Capsule())
+            }
+
+            Spacer(minLength: 0)
+
+            Toggle(isOn: $store.verifySearchBody) {
+                Text("只显示有正文的").font(.footnote)
+            }
+            .toggleStyle(.switch)
+        }
+        .padding(.horizontal)
+    }
+
+    @MainActor
+    private func isEnabled(_ source: SearchService.Source) -> Bool {
+        if store.searchSources.isEmpty { return true }
+        return store.searchSources.contains(source.title)
+    }
+
+    @MainActor
+    private func toggle(_ source: SearchService.Source) {
+        var current = store.searchSources
+        if current.isEmpty { current = SearchService.allSources.map(\.title) }
+        if let index = current.firstIndex(of: source.title) {
+            current.remove(at: index)
+        } else {
+            current.append(source.title)
+        }
+        store.searchSources = current
+    }
+
+    // MARK: - 粘贴链接
+
+    private var pasteRow: some View {
+        HStack {
+            TextField("也可以粘贴公开章节链接", text: $pastedURL)
+                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+            NavigationLink {
+                if let url = URL(string: pastedURL) {
+                    WebNovelReader(chapter: WebChapter(title: url.host ?? "网页正文", url: url.absoluteString))
+                } else {
+                    ContentUnavailableView("链接无效", systemImage: "link.badge.plus")
+                }
+            } label: {
+                Image(systemName: "arrow.down.doc").padding(10)
+            }
+            .buttonStyle(.bordered)
+            .disabled(URL(string: pastedURL)?.scheme == nil)
+        }
+        .padding(.horizontal)
+    }
+
+    // MARK: - 状态
+
+    @MainActor
+    private var statusBlock: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if searching, verifiedTotal > 0 {
+                ProgressView(value: Double(verifiedDone), total: Double(max(1, verifiedTotal)))
+                    .tint(store.theme.tint)
+            } else if searching {
+                ProgressView().tint(store.theme.tint)
+            }
+            Text(stage).font(.caption).foregroundStyle(.secondary)
+            if !sourceSummary.isEmpty {
+                Text(sourceSummary).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal)
+    }
+
+    @MainActor
+    private var sourceSummary: String {
+        if hits.isEmpty { return "" }
+        let sorted = hits.sorted { $0.value > $1.value }
+        let head = Array(sorted.prefix(5))
+        var parts: [String] = []
+        for pair in head { parts.append("\(pair.key) \(pair.value) 条") }
+        var text = "命中：" + parts.joined(separator: " · ")
+        if sorted.count > head.count { text += " · 等 \(sorted.count) 个源" }
+        return text
+    }
+
+    @MainActor
+    private var failureBlock: some View {
+        let head = Array(failures.prefix(6))
+        var text = "没连上：" + head.joined(separator: " · ")
+        if failures.count > head.count { text += " 等 \(failures.count) 个源" }
+        return Text(text)
+            .font(.caption2).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal)
+    }
+
+    /// 只做字符串拼接，不碰 `store`，所以可以安全地写成 `body` 之外的成员。
+    private func subtitle(_ candidate: WebCandidate) -> String {
+        var parts: [String] = []
+        if candidate.hasBody {
+            parts.append("约 \(candidate.approxCharacters) 字")
+        } else {
+            parts.append("未校验")
+        }
+        parts.append(candidate.engine)
+        if !candidate.site.isEmpty { parts.append(candidate.site) }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: - 搜索
+
     @MainActor
     private func runSearch() {
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        searching = true; message = nil; errors = []; results = []
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let sources = activeSources
+        let checkBody = store.verifySearchBody
+
+        searching = true
+        message = nil
+        failures = []
+        hits = [:]
+        results = []
+        stage = "正在向 \(sources.count) 个搜索源提问…"
+        verifiedDone = 0
+        verifiedTotal = 0
+        kept = 0
+
         Task {
-            let (items, failures) = await SearchService.search(query)
-            results = items; errors = failures; searching = false
-            message = items.isEmpty ? "没有取到候选结果。可能是当前网络无法访问搜索源，或搜索网站限制了请求。你仍可以粘贴已知章节链接在下一阶段直接阅读。" : "找到 \(items.count) 个网页候选；点开后在应用内提取正文。"
+            let stream = SearchService.search(text, sources: sources, verifyBody: checkBody)
+            for await event in stream {
+                apply(event)
+            }
+            searching = false
+            if results.isEmpty {
+                message = checkBody
+                    ? "这 \(sources.count) 个源都没找到能抽出正文的页面。可以关掉「只显示有正文的」先看看原始结果，或者换成更精确的书名。"
+                    : "没有取到候选结果。可能是网络访问不了这些搜索源，或搜索网站限制了请求。你仍可以粘贴已知章节链接。"
+            }
+        }
+    }
+
+    @MainActor
+    private func apply(_ event: SearchService.Event) {
+        switch event {
+        case .stage(let text):
+            stage = text
+        case .source(let title, let count, let error):
+            if let error {
+                failures.append("\(title)（\(error)）")
+            } else if count > 0 {
+                hits[title] = count
+            }
+        case .found(let candidate):
+            results.append(candidate)
+        case .progress(let finished, let all, let alive):
+            verifiedDone = finished
+            verifiedTotal = all
+            kept = alive
+        case .done(let scanned, let alive, let failed):
+            verifiedDone = max(verifiedTotal, scanned)
+            kept = alive
+            if scanned > 0 {
+                stage = "扫了 \(scanned) 条链接，留下 \(alive) 条有正文的"
+            }
+            if failed > 0 { stage += "；\(failed) 个源没连上" }
         }
     }
 }

@@ -95,6 +95,7 @@ struct ReaderView: View {
 ///   · 落在书籍介绍页（正文很短但有目录）时自动进入第一章
 struct WebNovelReader: View {
     @EnvironmentObject private var store: LibraryStore
+    @Environment(\.dismiss) private var dismiss
 
     private let start: WebChapter
     private let bookID: UUID?
@@ -155,6 +156,9 @@ struct WebNovelReader: View {
                     if previousTarget != nil {
                         Button("回到上一章") { go(previousTarget) }.buttonStyle(.bordered)
                     }
+                    // 搜索结果是按「有没有正文」筛过的，但网页随时可能改版或被拦截，
+                    // 所以真遇到空页面时要能给一条明确的退路，而不是卡在这里。
+                    Button("返回搜索结果") { dismiss() }.buttonStyle(.bordered)
                 }.padding()
             } else {
                 ScrollView {

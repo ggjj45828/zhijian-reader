@@ -55,10 +55,23 @@ struct ReadingBook: Codable, Identifiable, Hashable {
     } }
 }
 
+/// 一条搜索候选。
+///
+/// `bodyWeight` / `site` 是**正文校验**留下的痕迹：搜索源只给标题和链接，
+/// 到底有没有正文得真去取一次页面才知道 —— 取回来的页面如果抽不出够长的正文，
+/// 这条候选直接丢掉，不会出现在列表里（用户要求「没有正文的网站就不能出现」）。
 struct WebCandidate: Identifiable, Hashable {
     var id: String { url.absoluteString }
-    let title: String
-    let url: URL
-    let snippet: String
-    let engine: String
+    var title: String
+    var url: URL
+    var snippet: String
+    var engine: String
+    /// 校验通过后估出的正文权重（中文字符按 2 计）。0 = 还没校验 / 没通过
+    var bodyWeight: Int = 0
+    /// 校验通过后的真实站点主机名（跳转链接会用最终地址覆盖 url）
+    var site: String = ""
+
+    /// 展示用的正文字数估计。`bodyWeight` 里中文与中文标点都按 2 计，所以除以 2 很接近字数。
+    var approxCharacters: Int { bodyWeight / 2 }
+    var hasBody: Bool { bodyWeight > 0 }
 }
