@@ -290,7 +290,7 @@ enum ChapterIndex {
         var nav = Navigation()
         for anchor in doc.elementIndices(tag: "a") {
             guard let href = doc.nodes[anchor].attrs["href"],
-                  let url = resolve(href, base) else { continue }
+                  let url = resolve(href, base: base) else { continue }
             let text = doc.inlineText(of: anchor).replacingOccurrences(of: " ", with: "")
             guard text.count <= 12 else { continue }
             if nav.next == nil, matchesNext(text) { nav.next = url; continue }
@@ -349,7 +349,7 @@ enum ChapterIndex {
             var list: [WebChapter] = []
             for option in doc.descendantIndices(of: select, tag: "option") {
                 guard let value = doc.nodes[option].attrs["value"],
-                      let url = resolve(value, base) else { continue }
+                      let url = resolve(value, base: base) else { continue }
                 let label = doc.inlineText(of: option)
                 let title = label.isEmpty ? "第 \(list.count + 1) 节" : label
                 list.append(WebChapter(title: title, url: url))
@@ -363,7 +363,7 @@ enum ChapterIndex {
         var seen = Set<String>()
         for anchor in doc.elementIndices(tag: "a") {
             guard let href = doc.nodes[anchor].attrs["href"],
-                  let url = resolve(href, base) else { continue }
+                  let url = resolve(href, base: base) else { continue }
             guard !seen.contains(url) else { continue }
             let title = doc.inlineText(of: anchor)
             guard isChapterTitle(title) else { continue }
