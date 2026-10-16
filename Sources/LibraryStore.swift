@@ -47,6 +47,19 @@ final class LibraryStore: ObservableObject {
     func add(_ book: ReadingBook) { books.insert(book, at: 0) }
     func delete(_ book: ReadingBook) { books.removeAll { $0.id == book.id } }
     func update(_ book: ReadingBook) { if let i = books.firstIndex(where: { $0.id == book.id }) { books[i] = book } }
+    /// 网页连载在读的时候回写进度：目录抓全了要存下来（下次从书架进来直接有目录），
+    /// 当前章正文也存一份，离线时书架上至少还能看到最后读到的内容。
+    func updateWebReading(id: UUID, index: Int, chapters: [WebChapter], text: String, title: String) {
+        guard let position = books.firstIndex(where: { $0.id == id }) else { return }
+        if !chapters.isEmpty { books[position].webChapters = chapters }
+        if index >= 0 { books[position].webIndex = index }
+        if !text.isEmpty { books[position].content = text }
+        if !title.isEmpty { books[position].lastChapterTitle = title }
+        books[position].lastReadAt = Date()
+        if !chapters.isEmpty, index >= 0 {
+            books[position].progress = Double(index + 1) / Double(chapters.count)
+        }
+    }
     func importFile(_ url: URL) throws -> ReadingBook {
         let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
         let ext = url.pathExtension.lowercased()

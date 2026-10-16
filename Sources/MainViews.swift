@@ -40,6 +40,21 @@ struct BookshelfView: View {
         return types
     }()
 
+    /// 网页连载的入口章：优先回到上次读到的下标，否则退回目录第一章。
+    ///
+    /// 这本书里的 `webChapters` 是「上次读到哪」的唯一依据 —— 目录抓全时由
+    /// `LibraryStore.updateWebReading` 存下来，老版本存的 `library.json` 里没有这个
+    /// 字段（解成 nil），此时只能退回 `sourceUrl` 当入口，让阅读页自己重新抓一次目录。
+    @MainActor
+    private func resumeChapter(for book: ReadingBook) -> WebChapter {
+        let list = book.webChapters ?? []
+        if let position = book.webIndex, position >= 0, position < list.count {
+            return list[position]
+        }
+        if let first = list.first { return first }
+        return WebChapter(title: book.lastChapterTitle ?? book.title, url: book.sourceURL ?? "")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack { VStack(alignment: .leading, spacing: 4) { Text("纸间").font(.largeTitle.bold()); Text("你的私人阅读空间").foregroundStyle(.secondary) }; Spacer(); Button { showingImporter = true } label: { Image(systemName: "plus").font(.title3.bold()).padding(12).background(store.theme.tint.opacity(0.14), in: Circle()) } }
@@ -70,7 +85,14 @@ struct BookshelfView: View {
         }
         .background(store.theme.background.ignoresSafeArea())
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(for: ReadingBook.self) { ReaderView(book: $0) }
+        .navigationDestination(for: ReadingBook.self) { book in
+            if book.isWebSerial {
+                // 网页连载：回到上次读到的那一章，目录与进度都在书里
+                WebNovelReader(chapter: resumeChapter(for: book), bookID: book.id)
+            } else {
+                ReaderView(book: book)
+            }
+        }
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: Self.importableTypes, allowsMultipleSelection: true) { result in
             do { for url in try result.get() { store.add(try store.importFile(url)) } }
             catch { alertMessage = error.localizedDescription }
@@ -94,12 +116,12 @@ struct DiscoverView: View {
                 .padding(.horizontal).padding(.top, 12)
             Text("通过 iPhone 当前网络并行查询百度和必应。阅读器在本机提取网页，不需要 NAS 搜索服务。")
                 .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal)
-            HStack { TextField("也可以粘贴公开章节链接", text: $pastedURL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder); NavigationLink { if let url = URL(string: pastedURL) { ArticleView(candidate: WebCandidate(title: url.host ?? "网页正文", url: url, snippet: "", engine: "手动链接")) } else { ContentUnavailableView("链接无效", systemImage: "link.badge.plus") } } label: { Image(systemName: "arrow.down.doc").padding(10) }.buttonStyle(.bordered).disabled(URL(string: pastedURL)?.scheme == nil) }.padding(.horizontal)
+            HStack { TextField("也可以粘贴公开章节链接", text: $pastedURL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder); NavigationLink { if let url = URL(string: pastedURL) { WebNovelReader(chapter: WebChapter(title: url.host ?? "网页正文", url: url.absoluteString)) } else { ContentUnavailableView("链接无效", systemImage: "link.badge.plus") } } label: { Image(systemName: "arrow.down.doc").padding(10) }.buttonStyle(.bordered).disabled(URL(string: pastedURL)?.scheme == nil) }.padding(.horizontal)
             if searching { ProgressView("正在查询，最长约 9 秒…").padding() }
             if let message { Text(message).font(.footnote).foregroundStyle(.secondary).padding(.horizontal) }
             if !errors.isEmpty { Text(errors.joined(separator: "\n")).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal) }
             List(results) { candidate in
-                NavigationLink { ArticleView(candidate: candidate) } label: {
+                NavigationLink { WebNovelReader(chapter: WebChapter(title: candidate.title, url: candidate.url.absoluteString)) } label: {
                     VStack(alignment: .leading, spacing: 5) { Text(candidate.title).font(.headline).lineLimit(2); Text(candidate.snippet.isEmpty ? candidate.url.host ?? "网页来源" : candidate.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(3); Text("\(candidate.engine) · \(candidate.url.host ?? "")").font(.caption2).foregroundStyle(store.theme.tint) }
                         .padding(.vertical, 5)
                 }

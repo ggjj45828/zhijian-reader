@@ -37,8 +37,18 @@ struct ReadingBook: Codable, Identifiable, Hashable {
     var progress: Double = 0
     var bookmarks: [ReaderBookmark] = []
     var notes: [ReaderNote] = []
-    enum CodingKeys: String, CodingKey { case id, title, author, format, content, sourceURL = "sourceUrl", shelf, addedAt, lastReadAt, progress, bookmarks, notes }
+    /// 网页连载的目录（只对「从网页加入书架」的书有意义）。
+    /// 声明成 Optional 是刻意的：可选字段在 key 缺失时解成 nil，
+    /// 而带默认值的非可选字段在 key 缺失时会**整条 decode 失败**，
+    /// 那样老版本存的 library.json 会被整库丢掉。
+    var webChapters: [WebChapter]?
+    var webIndex: Int?
+    /// 最近读到的章节名，用于书架上「继续阅读」那一行
+    var lastChapterTitle: String?
+    enum CodingKeys: String, CodingKey { case id, title, author, format, content, sourceURL = "sourceUrl", shelf, addedAt, lastReadAt, progress, bookmarks, notes, webChapters, webIndex, lastChapterTitle }
     var wordCount: Int { content.count }
+    /// 有目录 + 有入口链接 = 按网页连载打开，而不是按离线正文打开
+    var isWebSerial: Bool { sourceURL != nil && !(webChapters ?? []).isEmpty }
     var chapters: [String] { content.components(separatedBy: .newlines).filter { line in
         let t = line.trimmingCharacters(in: .whitespaces)
         return t.count < 55 && (t.range(of: #"^(第[零〇一二三四五六七八九十百千万\d]+[章节回卷部篇]|序章|楔子|番外|Chapter\s+\d+)"#, options: .regularExpression) != nil)

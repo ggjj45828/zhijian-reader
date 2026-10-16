@@ -79,12 +79,15 @@ enum HTMLText {
 }
 
 enum ArticleService {
-    static func fetch(_ url: URL) async throws -> (String, String) {
-        var request = URLRequest(url: url); request.timeoutInterval = 14
+    /// 取网页原文，同时把**最终** URL 带回来（站点 301/302 跳转很常见，
+    /// 后续解析相对链接必须用最终地址当 base，否则目录/下一章全部解析错）。
+    static func fetchHTML(_ url: URL) async throws -> (html: String, url: URL) {
+        var request = URLRequest(url: url); request.timeoutInterval = 16
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        request.setValue("zh-CN,zh;q=0.9,en;q=0.6", forHTTPHeaderField: "Accept-Language")
         let (data, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw SearchIssue.badResponse }
-        let html = HTMLText.decodeBytes(data, response: response)
-        return (HTMLText.title(html, fallback: url.host ?? "网页正文"), HTMLText.extract(html))
+        let finalURL = response.url ?? url
+        return (HTMLText.decodeBytes(data, response: response), finalURL)
     }
 }
