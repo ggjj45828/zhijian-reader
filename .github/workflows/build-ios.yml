@@ -1,0 +1,85 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'Sources/**'
+      - 'ZhijianReader.xcodeproj/**'
+      - 'Info.plist'
+      - '.github/workflows/build-ios.yml'
+
+permissions:
+  contents: read
+
+env:
+  SCHEME: ZhijianReader
+  PROJECT: ZhijianReader.xcodeproj
+
+jobs:
+  build:
+    name: Build unsigned iOS IPA
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          xcodebuild -list -project "$PROJECT"
+
+      # ZIPFoundation 是 Swift Package（EPUB / DOCX 解压用）。这一步必须在
+      # build 之前显式跑，否则 xcodebuild 会在解析依赖时直接失败。
+      # 两次调用共用同一个 -clonedSourcePackagesDirPath，避免重复克隆。
+      - name: Resolve Swift Package dependencies
+        run: |
+          xcodebuild -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -resolvePackageDependencies \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm"
+
+      - name: Build for iPhone
+        run: |
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="$(find "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "Build succeeded but no app bundle was found." >&2
+            find "$RUNNER_TEMP/DerivedData/Build/Products" -maxdepth 3 -type d -name '*.app' -print >&2
+            exit 1
+          fi
+          echo "app: $APP_PATH"
+          ls -la "$APP_PATH"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          ditto -c -k --sequesterRsrc --keepParent Payload "$RUNNER_TEMP/ZhijianReader-unsigned.ipa"
+          unzip -l "$RUNNER_TEMP/ZhijianReader-unsigned.ipa"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhijian-unsigned-ipa
+          path: ${{ runner.temp }}/ZhijianReader-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
